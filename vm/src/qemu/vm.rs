@@ -23,7 +23,6 @@ pub trait QemuOption {
 
 }
 
-
 pub enum MachineType {
 	/// PC machine type. Uses a i440fx chipset.
 	Pc {
@@ -304,7 +303,7 @@ impl QemuOption for GraphicsAdapter {
 				};
 
 				// likewise, if we don't have one, then we're
-				// the misconfigured one
+				// the misconfigured one, not the VM
 				if uuid.is_empty() {
 					return false
 				}
@@ -350,18 +349,19 @@ impl QemuOption for NetworkAdapter {
 	}
 }
 
-
 fn join_options<'a>(vec: &'a Vec<Box<dyn QemuOption + 'a>>, machine: &VirtualMachine) -> Vec<String> {
-	// this is occursed
+	// this is occursed. it also doesn't join properly for the process API,
+	// but we handle that later
 	vec.iter()
 		.map(|o| {
 			if o.validate(machine) {
 				o.as_options()
 			} else {
+				// This really is not a good error handling strategy,
+				// but it's honestly the best I've got, short of causing a panic!
 				String::from("uh oh system fuck")
 			}
 		}).collect::<Vec<String>>()
-		//.join(" ")
 }
 
 /// A QEMU virtual machine.
@@ -436,24 +436,37 @@ impl<'a> VirtualMachine<'a> {
 		let mut vec = vec![
 			String::from("-nodefaults"),
 			String::from("-accel kvm"),
+			format!("-name {},process=sunlight_{}", self.name, self.name),
+			self.machine.as_ref().unwrap().as_options()
 		];
 
-		vec.push(format!("-name {},process=sunlight_{}", self.name, self.name));
-		vec.push(self.machine.as_ref().unwrap().as_options());
+		// Append devices and drives from the configuration
 		vec.append(&mut join_options(&self.devices, self));
 		vec.append(&mut join_options(&self.drives, self));
 
-		Ok(vec)
+		let split_arguments = |vec : &Vec<String>| {
+			let mut ret_vec = Vec::new();
+			vec.iter()
+				.for_each(|opt| {
+					// this is dumb but it SHOULD work for now, I suppose
+					// it's not like it has to be particularly high performance anyways,
+					// since it ends up only getting called hopefully a few times in lifecycle
+					let split = opt
+						.split(' ')
+						.collect::<Vec<&str>>();
 
-		/*Ok(format!("-nodefaults -accel kvm -name {},process=sunlight_{} {} {} {}",
-			self.name,
-			self.name,
-			self.machine.as_ref().unwrap().as_options(),
-			join_options(&self.devices, &self),
-			join_options(&self.drives, &self)))*/
+					for str in split {
+						ret_vec.push(str.to_string());
+					}
+				});
+		
+			ret_vec
+		};
+
+		Ok(split_arguments(&vec))
 	}
 
-	pub  fn start(&mut self) -> Result<(), VMQemuProcessStartError> {
+	pub fn start(&mut self) -> Result<(), VMQemuProcessStartError> {
 		//self.process = Some(Command::new("qemu-system-x86_64"));
 
 		let args = match self.to_arguments() {
